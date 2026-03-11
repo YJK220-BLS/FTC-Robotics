@@ -1,0 +1,216 @@
+package org.firstinspires.ftc.teamcode;
+
+import android.graphics.Canvas;
+import android.graphics.Color;
+import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.robotcore.hardware.DcMotor;
+import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.NormalizedColorSensor;
+import com.qualcomm.robotcore.hardware.NormalizedRGBA;
+import com.qualcomm.robotcore.util.Range;
+
+import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
+import org.firstinspires.ftc.robotcore.internal.camera.calibration.CameraCalibration;
+import org.firstinspires.ftc.vision.VisionPortal;
+import org.firstinspires.ftc.vision.VisionProcessor;
+import org.firstinspires.ftc.vision.apriltag.AprilTagDetection;
+import org.firstinspires.ftc.vision.apriltag.AprilTagProcessor;
+import org.opencv.core.*;
+import org.opencv.imgproc.Imgproc;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@TeleOp(name="SmithTeleopYJK", group="TeleOp")
+public class Motor extends LinearOpMode {
+
+    private DcMotorEx motor, motor1, motor2, motor3, motor4, gateMotor, motor6;
+    private NormalizedColorSensor colorSensor;
+    private VisionPortal visionPortal;
+    private AprilTagProcessor aprilTag;
+    private BallProcessor ballProcessor;
+
+
+    private final double MAX_STEP = 0.1;
+    private double lastPowerL = 0, lastPowerR = 0;
+
+    private double lastKnownTagX = 0;
+    private double lastKnownTagRange = 15.0;
+    private boolean tagEverFound = false;
+
+    private final double TICKS_PER_REV = 28;
+    private final double MIN_DIST = 24.0; // 1 tile
+    private final double MAX_DIST = 96.0; // 4 tiles
+    private final double MIN_RPM = 2100;
+    private final double MAX_RPM = 4200;
+
+    private boolean shooterToggle = false;
+    private double setRPM = 0;
+
+    @Override
+    public void runOpMode() {
+        colorSensor = hardwareMap.get(NormalizedColorSensor.class, "colorSensor");
+        motor = hardwareMap.get(DcMotorEx.class, "leftRear");
+        motor1 = hardwareMap.get(DcMotorEx.class, "rightRear");
+        motor2 = hardwareMap.get(DcMotorEx.class, "motor2"); 
+        motor3 = hardwareMap.get(DcMotorEx.class, "motor3"); 
+        motor4 = hardwareMap.get(DcMotorEx.class, "motor4"); 
+        gateMotor = hardwareMap.get(DcMotorEx.class, "motor5");
+        motor6 = hardwareMap.get(DcMotorEx.class, "motor6"); 
+
+        motor.setDirection(DcMotorEx.Direction.REVERSE);
+        motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        motor1.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        
+        motor2.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        motor3.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        motor4.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+
+        aprilTag = AprilTagProcessor.easyCreateWithDefaults();
+        ballProcessor = new BallProcessor();
+        visionPortal = new VisionPortal.Builder()
+                .setCamera(hardwareMap.get(WebcamName.class, "Webcam 1"))
+                .addProcessors(aprilTag, ballProcessor)
+                .build();
+
+        waitForStart();
+
+        while (opModeIsActive()) {
+            List<AprilTagDetection> detections = aprilTag.getDetections();
+            AprilTagDetection currentTag = null;
+            
+            for (AprilTagDetection det : detections) {
+                if (det.metadata != null) {
+                    currentTag = det;
+                    lastKnownTagX = det.ftcPose.bearing;
+                    lastKnownTagRange = det.ftcPose.range;
+                    tagEverFound = true;
+                    break;
+                }
+            }
+
+            NormalizedRGBA colors = colorSensor.getNormalizedColors();
+            float[] hsv = new float[3];
+            Color.colorToHSV(colors.toColor(), hsv);
+            String readColor = (hsv[0] >= 150 && hsv[0] <= 190) ? "Green" : 
+                               (hsv[0] >= 210 && hsv[0] <= 260) ? "Purple" : "None";
+
+            double drive = -gamepad1.left_stick_y;
+            double turn = gamepad1.right_stick_x;
+
+if (gamepad1.x) {
+    if (currentTag != null) {
+        double xError = currentTag.ftcPose.x;
+        
+        double kp = 0.05; 
+        
+        if (Math.abs(xError) > 1.0) {
+            turn = Range.clip(xError * kp, -0.5, 0.5);
+        } else {
+            turn = 0;
+        }
+        
+        lastKnownTagX = xError;
+        tagEverFound = true;
+    } else if (tagEverFound) {
+        // use last known position if tag is lost but button is still held
+        turn = Range.clip(lastKnownTagX * 0.03, -0.3, 0.3);
+    }
+}
+            else if (gamepad1.b && ballProcessor.targetDetected) {
+                double imageCenter = ballProcessor.cameraWidth / 2.0;
+                double error = ballProcessor.targetX - imageCenter;
+                turn = (Math.abs(error) > 20) ? Range.clip(error * 0.003, -0.4, 0.4) : 0;
+            }
+
+            double targetL = drive - turn;
+            double targetR = drive + turn;
+            double actualL = lastPowerL + Range.clip(targetL - lastPowerL, -MAX_STEP, MAX_STEP);
+            double actualR = lastPowerR + Range.clip(targetR - lastPowerR, -MAX_STEP, MAX_STEP);
+
+            motor.setPower(actualL);
+            motor1.setPower(actualR);
+            lastPowerL = actualL;
+            lastPowerR = actualR;
+
+            if (gamepad1.right_bumper) {
+                motor2.setPower(-1); 
+                motor6.setPower(-1);
+            } else if (gamepad1.left_bumper) {
+                motor2.setPower(1);
+                motor6.setPower(1);
+            } else {
+                motor2.setPower(0);
+                motor6.setPower(0);
+            }
+
+            gateMotor.setPower(gamepad1.a ? 1.0 : 0);
+            if (gamepad1.right_trigger > 0.1) {
+                shooterToggle = !shooterToggle;
+                sleep(300); 
+            }
+
+            if (shooterToggle) {
+                double dist = (currentTag != null) ? currentTag.ftcPose.range : lastKnownTagRange;
+                double clampedDist = Range.clip(dist, MIN_DIST, MAX_DIST);
+                setRPM = ((clampedDist - MIN_DIST) * (MAX_RPM - MIN_RPM) / (MAX_DIST - MIN_DIST)) + MIN_RPM;
+
+                double tps = (setRPM / 60.0) * TICKS_PER_REV; //whenever camera is false, set rpm to last set rpm
+                motor3.setVelocity(tps);
+                motor4.setVelocity(-tps);
+            } else {
+                motor3.setVelocity(0);
+                motor4.setVelocity(0);
+            }
+
+            telemetry.addData("Mode", (gamepad1.x) ? "AUTO-LOCK" : "MANUAL");
+            telemetry.addData("Tag Visible", (currentTag != null));
+            telemetry.addData("Range", (currentTag != null) ? currentTag.ftcPose.range : "N/A");
+            telemetry.addData("Target RPM", setRPM);
+            telemetry.addData("Detected Color", readColor);
+            telemetry.update();
+        }
+        visionPortal.close();
+    }
+
+    public static class BallProcessor implements VisionProcessor {
+        private Mat hsvMat = new Mat(), mask = new Mat();
+        private Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5, 5));
+        public boolean targetDetected = false;
+        public double targetX = 0;
+        public int cameraWidth = 640;
+
+        @Override public void init(int width, int height, CameraCalibration cal) { this.cameraWidth = width; }
+
+        @Override
+        public Object processFrame(Mat frame, long time) {
+            Imgproc.cvtColor(frame, hsvMat, Imgproc.COLOR_RGB2HSV);
+            Core.inRange(hsvMat, new Scalar(35, 80, 40), new Scalar(95, 255, 255), mask);
+            Imgproc.morphologyEx(mask, mask, Imgproc.MORPH_CLOSE, kernel);
+
+            List<MatOfPoint> contours = new ArrayList<>();
+            Imgproc.findContours(mask, contours, new Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE);
+
+            double maxArea = 0;
+            Rect largestRect = null;
+            for (MatOfPoint c : contours) {
+                double area = Imgproc.contourArea(c);
+                if (area > 1000 && area > maxArea) {
+                    maxArea = area;
+                    largestRect = Imgproc.boundingRect(c);
+                }
+            }
+
+            if (largestRect != null) {
+                targetDetected = true;
+                targetX = largestRect.x + (largestRect.width / 2.0);
+                Imgproc.rectangle(frame, largestRect, new Scalar(0, 255, 0), 3);
+            } else {
+                targetDetected = false;
+            }
+            return null;
+        }
+        @Override public void onDrawFrame(Canvas canvas, int oW, int oH, float sB, float sC, Object ctx) {}
+    }
+}
