@@ -1,0 +1,248 @@
+package org.firstinspires.ftc.teamcode;
+
+import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
+import com.qualcomm.robotcore.hardware.DcMotor;
+import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
+import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.IMU;
+import com.qualcomm.robotcore.util.Range;
+import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
+import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
+import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
+import org.firstinspires.ftc.vision.VisionPortal;
+import org.firstinspires.ftc.vision.apriltag.AprilTagDetection;
+import org.firstinspires.ftc.vision.apriltag.AprilTagProcessor;
+
+import java.util.List;
+
+@Autonomous(name="spongebobAuto", group="Autonomous")
+public class TurningTest extends LinearOpMode {
+
+    private DcMotorEx leftRear, rightRear, intake1, intake2;
+    private DcMotorEx shooterLeft, shooterRight, gateMotor;
+    private IMU imu;
+    
+    private VisionPortal visionPortal;
+    private AprilTagProcessor aprilTag;
+    
+    private final double TICKS_PER_REV = 28; 
+    private final double MIN_DIST = 24.0; 
+    private final double MAX_DIST = 96.0; 
+    private final double MIN_RPM = 1800;              
+    private final double MAX_RPM = 4200;
+    
+    static final double TICKS_PER_INCH = 45.0; 
+
+    @Override
+    public void runOpMode() {
+        leftRear = hardwareMap.get(DcMotorEx.class, "leftRear");
+        rightRear = hardwareMap.get(DcMotorEx.class, "rightRear");
+        intake1 = hardwareMap.get(DcMotorEx.class, "motor2"); // Intake motor 1
+        intake2 = hardwareMap.get(DcMotorEx.class, "motor6"); // Intake motor 2
+        
+        shooterLeft = hardwareMap.get(DcMotorEx.class, "motor3");
+        shooterRight = hardwareMap.get(DcMotorEx.class, "motor4");
+        gateMotor = hardwareMap.get(DcMotorEx.class, "motor5");
+
+        leftRear.setDirection(DcMotorEx.Direction.REVERSE);
+        shooterLeft.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        shooterRight.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+
+        imu = hardwareMap.get(IMU.class, "imu");
+        IMU.Parameters parameters = new IMU.Parameters(new RevHubOrientationOnRobot(
+                RevHubOrientationOnRobot.LogoFacingDirection.UP,
+                RevHubOrientationOnRobot.UsbFacingDirection.FORWARD));
+        imu.initialize(parameters);
+        
+        aprilTag = AprilTagProcessor.easyCreateWithDefaults();
+        visionPortal = new VisionPortal.Builder()
+                .setCamera(hardwareMap.get(WebcamName.class, "Webcam 1"))
+                .addProcessors(aprilTag)
+                .build();
+
+        waitForStart();
+
+
+        driveInches(-40, 1);
+        intakePower(-1);
+        alignAndShoot(4000); 
+      //  driveInches(20, 0.5);
+        sleep(500);
+        intakePower(0);
+        sleep(500);
+        driveSpline(25, 5, 0.8);
+        intakePower(-1);
+        driveInches(30, 0.5);
+        
+        sleep(1000);
+        driveInches(-30, 1);
+        intakePower(0);
+        
+        sleep(500);
+        rotate(-35, 1);
+        intakePower(-1);
+        alignAndShoot(4000); 
+        sleep(500);
+        intakePower(0);
+        rotate(80, 1);
+        sleep(400);
+        driveInches(20, 1);
+        
+        sleep(500);
+        intakePower(-1);
+        driveSpline(5, 36, 1);
+        sleep(100);
+        driveInches(15, 0.5);
+        sleep(500);
+        driveInches(-20, 1);
+        sleep(500);
+        rotate(-90, 0.8);
+        driveInches(30, 1);
+        sleep(500);
+        rotate(35, 1);
+        sleep(100);
+        alignAndShoot(4000); 
+        sleep(500);
+        rotate(100, 1);
+        sleep(500);
+        driveInches(90, 1);
+        
+        visionPortal.close();
+    }
+
+
+    private void alignAndShoot(long shootDurationMs) {
+        double lastRange = 48.0; 
+        
+        long alignStartTime = System.currentTimeMillis();
+        while (opModeIsActive() && (System.currentTimeMillis() - alignStartTime < 2000)) {
+            List<AprilTagDetection> detections = aprilTag.getDetections();
+            AprilTagDetection target = null;
+
+            for (AprilTagDetection det : detections) {
+                if (det.metadata != null) {
+                    target = det;
+                    break;
+                }
+            }
+
+            if (target != null) {
+                double xError = target.ftcPose.x;
+                lastRange = target.ftcPose.range;
+                
+                if (Math.abs(xError) > 1.0) {
+                    double turnPower = Range.clip(xError * 0.05, -0.3, 0.3);
+                    leftRear.setPower(-turnPower);
+                    rightRear.setPower(turnPower);
+                } else {
+                    leftRear.setPower(0);
+                    rightRear.setPower(0);
+                    break;
+                }
+            }
+            telemetry.addData("Status", "Aligning to Tag...");
+            telemetry.update();
+        }
+        
+        leftRear.setPower(0);
+        rightRear.setPower(0);
+
+        double clampedDist = Range.clip(lastRange, MIN_DIST, MAX_DIST);
+        double targetRPM = ((clampedDist - MIN_DIST) * (MAX_RPM - MIN_RPM) / (MAX_DIST - MIN_DIST)) + MIN_RPM;
+        double tps = (targetRPM / 60.0) * TICKS_PER_REV;
+
+        shooterLeft.setVelocity(tps);
+        shooterRight.setVelocity(-tps);
+        
+        sleep(1000);
+        
+        gateMotor.setPower(1);
+        sleep(shootDurationMs);
+        
+        gateMotor.setPower(0);
+        shooterLeft.setVelocity(0);
+        shooterRight.setVelocity(0);
+    }
+
+    private void moveRobot(double leftInches, double rightInches, double power) {
+        int leftTarget = leftRear.getCurrentPosition() + (int)(leftInches * TICKS_PER_INCH);
+        int rightTarget = rightRear.getCurrentPosition() + (int)(rightInches * TICKS_PER_INCH);
+
+        leftRear.setTargetPosition(leftTarget);
+        rightRear.setTargetPosition(rightTarget);
+
+        leftRear.setMode(DcMotor.RunMode.RUN_TO_POSITION);
+        rightRear.setMode(DcMotor.RunMode.RUN_TO_POSITION);
+
+        double leftP = power;
+        double rightP = power;
+        
+        if (Math.abs(leftInches) > Math.abs(rightInches) && leftInches != 0) {
+            rightP = power * (Math.abs(rightInches) / Math.abs(leftInches));
+        } else if (Math.abs(rightInches) > Math.abs(leftInches) && rightInches != 0) {
+            leftP = power * (Math.abs(leftInches) / Math.abs(rightInches));
+        }
+
+        leftRear.setPower(Math.abs(leftP));
+        rightRear.setPower(Math.abs(rightP));
+
+        while (opModeIsActive() && (leftRear.isBusy() && rightRear.isBusy())) {
+            telemetry.addData("Moving", "L:%d R:%d", leftTarget, rightTarget);
+            telemetry.update();
+        }
+        stopAndReset();
+    }
+    public void rotate(double degrees, double power) {
+        imu.resetYaw(); 
+
+        double targetAngle = -degrees; 
+        
+        while (opModeIsActive()) {
+            YawPitchRollAngles orientation = imu.getRobotYawPitchRollAngles();
+            double currentAngle = orientation.getYaw(AngleUnit.DEGREES);
+
+            double error = targetAngle - currentAngle;
+
+            if (currentAngle >= degrees && currentAngle <= degrees + 10) {
+                break; 
+            }
+
+            double turnPower = error * 0.03;
+
+            turnPower = Range.clip(turnPower, -power, power);
+            
+            if (Math.abs(turnPower) < 0.1) {
+                turnPower = Math.signum(turnPower) * 0.1;
+            }
+
+            leftRear.setPower(-turnPower); 
+            rightRear.setPower(turnPower);
+
+            telemetry.addData("Target", targetAngle);
+            telemetry.addData("Current", currentAngle);
+            telemetry.addData("Error", error);
+            telemetry.update();
+        }
+
+        leftRear.setPower(0);
+        rightRear.setPower(0);
+    }
+    private void intakePower(double power) {
+        intake1.setPower(power); 
+        intake2.setPower(power);
+    }
+    public void driveSpline(double leftDist, double rightDist, double power) {
+        moveRobot(leftDist, rightDist, power);
+    }
+    public void driveInches(double inches, double power) {
+        moveRobot(inches, inches, power);
+    }
+
+    private void stopAndReset() {
+        leftRear.setPower(0);
+        rightRear.setPower(0);
+        leftRear.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        rightRear.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+    }
+}
